@@ -8,7 +8,7 @@
     transformation for Carvera CNC with surface probing.
 
 .NOTES
-    Version: 1.0.0
+    Version: 1.1.0
     Author:  Todd Pearsall
     License: CC BY-NC 4.0
     GitHub:  https://github.com/tpearsallmd/fusion360-gcode-merge
@@ -30,7 +30,7 @@ $consolePtr = [Console.Window]::GetConsoleWindow()
 # Create the main form
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Fusion G-Code File Merge"
-$form.Size = New-Object System.Drawing.Size(500, 400)
+$form.Size = New-Object System.Drawing.Size(500, 435)
 $form.StartPosition = "CenterScreen"
 $form.AllowDrop = $true
 $form.FormBorderStyle = "FixedSingle"
@@ -87,12 +87,29 @@ $mergeButton.Location = New-Object System.Drawing.Point(370, 250)
 $mergeButton.Enabled = $false
 $form.Controls.Add($mergeButton)
 
+# Create output filename label
+$outputLabel = New-Object System.Windows.Forms.Label
+$outputLabel.Text = "Output:"
+$outputLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$outputLabel.Size = New-Object System.Drawing.Size(55, 25)
+$outputLabel.Location = New-Object System.Drawing.Point(10, 290)
+$outputLabel.TextAlign = "MiddleLeft"
+$form.Controls.Add($outputLabel)
+
+# Create output filename textbox
+$outputTextbox = New-Object System.Windows.Forms.TextBox
+$outputTextbox.Font = New-Object System.Drawing.Font("Consolas", 10)
+$outputTextbox.Size = New-Object System.Drawing.Size(415, 25)
+$outputTextbox.Location = New-Object System.Drawing.Point(65, 290)
+$outputTextbox.Text = ""
+$form.Controls.Add($outputTextbox)
+
 # Create status label
 $statusLabel = New-Object System.Windows.Forms.Label
 $statusLabel.Text = ""
 $statusLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $statusLabel.Size = New-Object System.Drawing.Size(460, 60)
-$statusLabel.Location = New-Object System.Drawing.Point(10, 290)
+$statusLabel.Location = New-Object System.Drawing.Point(10, 325)
 $statusLabel.BorderStyle = "FixedSingle"
 $form.Controls.Add($statusLabel)
 
@@ -169,6 +186,14 @@ function Update-UI {
 
     foreach ($file in $script:fileList) {
         [void]$listBox.Items.Add("$($file.FileName).cnc (Seq: $($file.Sequence))")
+    }
+
+    # Update output filename suggestion
+    if ($script:fileList.Count -gt 0) {
+        $prefix = $script:fileList[0].Prefix
+        $outputTextbox.Text = "$prefix-merged.cnc"
+    } else {
+        $outputTextbox.Text = ""
     }
 
     $validation = Validate-Files
@@ -453,12 +478,26 @@ function Process-LaserLine {
 
 # Function to merge G-code files
 function Merge-GCodeFiles {
-    param([bool]$laserPauseEnabled = $true)
+    param(
+        [bool]$laserPauseEnabled = $true,
+        [string]$outputFileName = ""
+    )
 
     $sortedFiles = $script:fileList | Sort-Object -Property Sequence
     $outputFolder = [System.IO.Path]::GetDirectoryName($sortedFiles[0].Path)
-    $prefix = $sortedFiles[0].Prefix
-    $outputPath = Join-Path $outputFolder "$prefix-merged.cnc"
+
+    # Use custom filename if provided, otherwise default to prefix-merged.cnc
+    if ([string]::IsNullOrWhiteSpace($outputFileName)) {
+        $prefix = $sortedFiles[0].Prefix
+        $outputFileName = "$prefix-merged.cnc"
+    }
+
+    # Ensure .cnc extension
+    if (-not $outputFileName.EndsWith(".cnc", [StringComparison]::OrdinalIgnoreCase)) {
+        $outputFileName = "$outputFileName.cnc"
+    }
+
+    $outputPath = Join-Path $outputFolder $outputFileName
 
     $mergedContent = New-Object System.Text.StringBuilder
 
@@ -481,7 +520,12 @@ function Merge-GCodeFiles {
     # Pre-scan all files to find T99 laser setup info
     $laserSetupInfo = @{ FirstX = $null; FirstY = $null; LaserPower = $null }
     foreach ($file in $sortedFiles) {
-        $fileLines = Get-Content -Path $file.Path
+        try {
+            $fileLines = Get-Content -Path $file.Path -ErrorAction Stop
+        }
+        catch {
+            throw "Failed to read file '$($file.FileName).cnc': $($_.Exception.Message)"
+        }
         $hasT99 = $fileLines | Where-Object { $_ -match '^T99\s*M6' }
         if ($hasT99) {
             $laserSetupInfo = Get-LaserSetupInfo -lines $fileLines
@@ -503,7 +547,12 @@ function Merge-GCodeFiles {
         $isFirst = ($i -eq 0)
         $isLast = ($i -eq $sortedFiles.Count - 1)
 
-        $lines = Get-Content -Path $file.Path
+        try {
+            $lines = Get-Content -Path $file.Path -ErrorAction Stop
+        }
+        catch {
+            throw "Failed to read file '$($file.FileName).cnc': $($_.Exception.Message)"
+        }
 
         # Add source file comment
         [void]$mergedContent.AppendLine("")
@@ -580,7 +629,12 @@ function Merge-GCodeFiles {
     }
 
     # Write the merged file
-    $mergedContent.ToString() | Out-File -FilePath $outputPath -Encoding ASCII
+    try {
+        $mergedContent.ToString() | Out-File -FilePath $outputPath -Encoding ASCII -ErrorAction Stop
+    }
+    catch {
+        throw "Failed to write output file '$([System.IO.Path]::GetFileName($outputPath))': $($_.Exception.Message)"
+    }
 
     return $outputPath
 }
@@ -642,6 +696,7 @@ $form.Add_DragDrop({
 $clearButton.Add_Click({
     $script:fileList = [System.Collections.ArrayList]::new()
     $listBox.Items.Clear()
+    $outputTextbox.Text = ""
     $statusLabel.Text = ""
     $statusLabel.ForeColor = [System.Drawing.Color]::Black
     $mergeButton.Enabled = $false
@@ -650,11 +705,53 @@ $clearButton.Add_Click({
 # Merge button click
 $mergeButton.Add_Click({
     try {
+        # Validate output filename
+        $customFilename = $outputTextbox.Text.Trim()
+        if ([string]::IsNullOrWhiteSpace($customFilename)) {
+            $statusLabel.Text = "Error: Output filename cannot be empty"
+            $statusLabel.ForeColor = [System.Drawing.Color]::DarkRed
+            return
+        }
+
+        # Check for invalid filename characters
+        $invalidChars = [System.IO.Path]::GetInvalidFileNameChars()
+        $filenameOnly = [System.IO.Path]::GetFileName($customFilename)
+        foreach ($char in $invalidChars) {
+            if ($filenameOnly.Contains($char)) {
+                $statusLabel.Text = "Error: Output filename contains invalid characters"
+                $statusLabel.ForeColor = [System.Drawing.Color]::DarkRed
+                return
+            }
+        }
+
+        # Build output path to check for overwrite
+        $outputFolder = [System.IO.Path]::GetDirectoryName($script:fileList[0].Path)
+        $outputFileName = $customFilename
+        if (-not $outputFileName.EndsWith(".cnc", [StringComparison]::OrdinalIgnoreCase)) {
+            $outputFileName = "$outputFileName.cnc"
+        }
+        $outputPath = Join-Path $outputFolder $outputFileName
+
+        # Check if output file already exists
+        if (Test-Path $outputPath) {
+            $result = [System.Windows.Forms.MessageBox]::Show(
+                "File '$outputFileName' already exists.`n`nDo you want to overwrite it?",
+                "Confirm Overwrite",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning
+            )
+            if ($result -ne [System.Windows.Forms.DialogResult]::Yes) {
+                $statusLabel.Text = "Merge cancelled - file not overwritten"
+                $statusLabel.ForeColor = [System.Drawing.Color]::DarkOrange
+                return
+            }
+        }
+
         $statusLabel.Text = "Merging files..."
         $statusLabel.ForeColor = [System.Drawing.Color]::DarkBlue
         $form.Refresh()
 
-        $outputPath = Merge-GCodeFiles -laserPauseEnabled $laserPauseCheckbox.Checked
+        $outputPath = Merge-GCodeFiles -laserPauseEnabled $laserPauseCheckbox.Checked -outputFileName $customFilename
 
         $statusLabel.Text = "Success! Created:`n$([System.IO.Path]::GetFileName($outputPath))"
         $statusLabel.ForeColor = [System.Drawing.Color]::DarkGreen
