@@ -1,3 +1,19 @@
+<#
+.SYNOPSIS
+    Fusion G-Code File Merge - Merge multiple G-code files for ATC machines
+
+.DESCRIPTION
+    A Windows utility to merge sequenced G-code files from Fusion 360 into a single
+    file for CNC machines with automatic tool changers. Includes automatic T99 laser
+    transformation for Carvera CNC with surface probing.
+
+.NOTES
+    Version: 1.0.0
+    Author:  Todd Pearsall
+    License: CC BY-NC 4.0
+    GitHub:  https://github.com/tpearsallmd/fusion360-gcode-merge
+#>
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
