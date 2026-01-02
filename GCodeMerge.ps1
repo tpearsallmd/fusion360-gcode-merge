@@ -1,0 +1,693 @@
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# Hide the PowerShell console window
+Add-Type -Name Window -Namespace Console -MemberDefinition '
+    [DllImport("Kernel32.dll")]
+    public static extern IntPtr GetConsoleWindow();
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, Int32 nCmdShow);
+'
+$consolePtr = [Console.Window]::GetConsoleWindow()
+[void][Console.Window]::ShowWindow($consolePtr, 0) # 0 = Hide
+
+# Create the main form
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Fusion G-Code File Merge"
+$form.Size = New-Object System.Drawing.Size(500, 400)
+$form.StartPosition = "CenterScreen"
+$form.AllowDrop = $true
+$form.FormBorderStyle = "FixedSingle"
+$form.MaximizeBox = $false
+
+# Set application icon (use shell32.dll icon - index 71 is a document/merge style icon)
+$iconExtractor = Add-Type -MemberDefinition '
+    [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+    public static extern IntPtr ExtractIcon(IntPtr hInst, string lpszExeFileName, int nIconIndex);
+' -Name 'IconExtractor' -Namespace 'Win32' -PassThru
+$iconHandle = $iconExtractor::ExtractIcon([IntPtr]::Zero, "shell32.dll", 71)
+if ($iconHandle -ne [IntPtr]::Zero) {
+    $form.Icon = [System.Drawing.Icon]::FromHandle($iconHandle)
+}
+
+# Create drop zone label
+$dropLabel = New-Object System.Windows.Forms.Label
+$dropLabel.Text = "Drag and drop .cnc files here"
+$dropLabel.Font = New-Object System.Drawing.Font("Segoe UI", 12)
+$dropLabel.Size = New-Object System.Drawing.Size(460, 40)
+$dropLabel.Location = New-Object System.Drawing.Point(10, 10)
+$dropLabel.TextAlign = "MiddleCenter"
+$dropLabel.BorderStyle = "FixedSingle"
+$dropLabel.BackColor = [System.Drawing.Color]::FromArgb(240, 240, 240)
+$form.Controls.Add($dropLabel)
+
+# Create listbox to show files
+$listBox = New-Object System.Windows.Forms.ListBox
+$listBox.Size = New-Object System.Drawing.Size(460, 180)
+$listBox.Location = New-Object System.Drawing.Point(10, 60)
+$listBox.Font = New-Object System.Drawing.Font("Consolas", 10)
+$form.Controls.Add($listBox)
+
+# Create clear button
+$clearButton = New-Object System.Windows.Forms.Button
+$clearButton.Text = "Clear"
+$clearButton.Size = New-Object System.Drawing.Size(100, 30)
+$clearButton.Location = New-Object System.Drawing.Point(10, 250)
+$form.Controls.Add($clearButton)
+
+# Create laser pause checkbox
+$laserPauseCheckbox = New-Object System.Windows.Forms.CheckBox
+$laserPauseCheckbox.Text = "Laser Pause"
+$laserPauseCheckbox.Checked = $true
+$laserPauseCheckbox.Size = New-Object System.Drawing.Size(100, 25)
+$laserPauseCheckbox.Location = New-Object System.Drawing.Point(120, 253)
+$form.Controls.Add($laserPauseCheckbox)
+
+# Create merge button
+$mergeButton = New-Object System.Windows.Forms.Button
+$mergeButton.Text = "Merge Files"
+$mergeButton.Size = New-Object System.Drawing.Size(100, 30)
+$mergeButton.Location = New-Object System.Drawing.Point(370, 250)
+$mergeButton.Enabled = $false
+$form.Controls.Add($mergeButton)
+
+# Create status label
+$statusLabel = New-Object System.Windows.Forms.Label
+$statusLabel.Text = ""
+$statusLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$statusLabel.Size = New-Object System.Drawing.Size(460, 60)
+$statusLabel.Location = New-Object System.Drawing.Point(10, 290)
+$statusLabel.BorderStyle = "FixedSingle"
+$form.Controls.Add($statusLabel)
+
+# Store file info
+$script:fileList = [System.Collections.ArrayList]::new()
+
+# Function to parse filename and extract prefix and sequence number
+function Parse-FileName {
+    param([string]$filePath)
+
+    $fileName = [System.IO.Path]::GetFileNameWithoutExtension($filePath)
+
+    # Match pattern: prefix-number (e.g., TrumpCoin-1001)
+    if ($fileName -match '^(.+)-(\d+)$') {
+        return [PSCustomObject]@{
+            Path = $filePath
+            FileName = $fileName
+            Prefix = $matches[1]
+            Sequence = [int]$matches[2]
+        }
+    }
+    return $null
+}
+
+# Function to validate files
+function Validate-Files {
+    if ($script:fileList.Count -lt 1) {
+        return @{ Valid = $false; Message = "Add at least 1 file to process" }
+    }
+
+    $prefixes = $script:fileList | ForEach-Object { $_.Prefix } | Select-Object -Unique
+
+    if ($prefixes.Count -gt 1) {
+        return @{ Valid = $false; Message = "All files must have the same prefix. Found: $($prefixes -join ', ')" }
+    }
+
+    # Check for gaps in sequence numbers (only if more than 1 file)
+    if ($script:fileList.Count -gt 1) {
+        $sortedSeq = $script:fileList | Sort-Object -Property Sequence | ForEach-Object { $_.Sequence }
+        $missingSeq = @()
+
+        for ($i = 0; $i -lt $sortedSeq.Count - 1; $i++) {
+            $current = $sortedSeq[$i]
+            $next = $sortedSeq[$i + 1]
+
+            # Check for any missing numbers between current and next
+            for ($j = $current + 1; $j -lt $next; $j++) {
+                $missingSeq += $j
+            }
+        }
+
+        if ($missingSeq.Count -gt 0) {
+            $prefix = $script:fileList[0].Prefix
+            $missingFiles = $missingSeq | ForEach-Object { "$prefix-$_.cnc" }
+            return @{ Valid = $false; Message = "Missing file(s) in sequence:`n$($missingFiles -join ', ')" }
+        }
+
+        return @{ Valid = $true; Message = "Ready to merge $($script:fileList.Count) files" }
+    }
+
+    return @{ Valid = $true; Message = "Ready to process 1 file" }
+}
+
+# Function to update UI
+function Update-UI {
+    $listBox.Items.Clear()
+
+    # Sort by sequence number (keep as ArrayList)
+    $sorted = $script:fileList | Sort-Object -Property Sequence
+    $script:fileList.Clear()
+    foreach ($item in $sorted) {
+        [void]$script:fileList.Add($item)
+    }
+
+    foreach ($file in $script:fileList) {
+        [void]$listBox.Items.Add("$($file.FileName).cnc (Seq: $($file.Sequence))")
+    }
+
+    $validation = Validate-Files
+    $statusLabel.Text = $validation.Message
+
+    if ($validation.Valid) {
+        $statusLabel.ForeColor = [System.Drawing.Color]::DarkGreen
+        $mergeButton.Enabled = $true
+    } else {
+        $statusLabel.ForeColor = [System.Drawing.Color]::DarkRed
+        $mergeButton.Enabled = $false
+    }
+}
+
+# Function to pre-scan T99 file content to extract first XY position and spindle speed
+function Get-LaserSetupInfo {
+    param([string[]]$lines)
+
+    $firstX = $null
+    $firstY = $null
+    $laserPower = $null
+    $inT99Section = $false
+
+    foreach ($line in $lines) {
+        $trimmed = $line.Trim()
+
+        # Detect T99 tool change
+        if ($trimmed -match '^T99\s*M6') {
+            $inT99Section = $true
+            continue
+        }
+
+        # Stop if we hit another tool change
+        if ($inT99Section -and $trimmed -match '^T\d+\s*M6' -and $trimmed -notmatch '^T99') {
+            break
+        }
+
+        if ($inT99Section) {
+            # Extract spindle speed (laser power)
+            if ($null -eq $laserPower -and ($trimmed -match '^S(\d+)\s*M3' -or $trimmed -match '^M3\s*S(\d+)')) {
+                $laserPower = [int]$matches[1]
+            }
+
+            # Extract first X position
+            if ($null -eq $firstX -and $trimmed -match 'X([-\d\.]+)') {
+                $firstX = $matches[1]
+            }
+
+            # Extract first Y position
+            if ($null -eq $firstY -and $trimmed -match 'Y([-\d\.]+)') {
+                $firstY = $matches[1]
+            }
+
+            # Once we have all info, we can stop
+            if ($null -ne $firstX -and $null -ne $firstY -and $null -ne $laserPower) {
+                break
+            }
+        }
+    }
+
+    return @{
+        FirstX = $firstX
+        FirstY = $firstY
+        LaserPower = $laserPower
+    }
+}
+
+# Function to process a single line for laser (T99) transformation
+function Process-LaserLine {
+    param(
+        [string]$line,
+        [string]$trimmedLine,
+        [ref]$inLaserMode,
+        [ref]$laserStarted,
+        [ref]$lastRampX,
+        [ref]$lastRampY,
+        [ref]$firstLaserMove,
+        [ref]$laserLifted,
+        [ref]$currentLaserPower,
+        [string]$fileName,
+        [hashtable]$laserSetupInfo,
+        [bool]$laserPauseEnabled
+    )
+
+    # Detect T99 tool change - start laser mode
+    if ($trimmedLine -match '^T99\s*M6') {
+        $inLaserMode.Value = $true
+        $laserStarted.Value = $false
+        $lastRampX.Value = $null
+        $lastRampY.Value = $null
+        $firstLaserMove.Value = $true
+        $laserLifted.Value = $true  # Start lifted so first move is G0 positioning
+
+        # Validate laser power
+        if ($null -ne $laserSetupInfo.LaserPower -and $laserSetupInfo.LaserPower -gt 1000) {
+            throw "Laser power cannot exceed 1000 (100%). Found S$($laserSetupInfo.LaserPower) in $fileName"
+        }
+
+        # Build the probing XY position
+        $probeX = if ($null -ne $laserSetupInfo.FirstX) { $laserSetupInfo.FirstX } else { "0" }
+        $probeY = if ($null -ne $laserSetupInfo.FirstY) { $laserSetupInfo.FirstY } else { "0" }
+
+        # Convert spindle speed (0-1000) to laser power percentage (0-100)
+        $spindleSpeed = if ($null -ne $laserSetupInfo.LaserPower) { $laserSetupInfo.LaserPower } else { 500 }
+        $laserPowerPercent = [math]::Round($spindleSpeed / 10)
+
+        # Mark laser as started and track current power level
+        $laserStarted.Value = $true
+        $currentLaserPower.Value = $spindleSpeed
+
+        # Build laser setup sequence
+        $setupLines = @(
+            "(--- Begin Laser Setup ---)",
+            "M5 (Spindle stop)",
+            "T0 M6 (Pick up wireless probe)"
+        )
+        if ($laserPauseEnabled) {
+            $setupLines += "M600 (Remove vacuum boot for laser engraving)"
+        }
+        $setupLines += @(
+            "G54 (Ensure G54 WCS)",
+            "G0 Z20 (Safe Z height)",
+            "G0 X$probeX Y$probeY (Move to first laser position)",
+            "G38.2 Z-50 F100 (Probe surface)",
+            "G0 Z5 (Retract after probe)",
+            "M321 (Enable laser mode - returns probe automatically)",
+            "G54 (Re-confirm G54 WCS after M321)",
+            "G0 Z0 (Move to laser focal height)",
+            "M325 S$laserPowerPercent (Set laser power $laserPowerPercent%)",
+            "M3 (Enable laser firing)",
+            "(--- Begin Laser Paths ---)"
+        )
+        return $setupLines
+    }
+
+    # Detect other tool change - end laser mode if active
+    if ($trimmedLine -match '^T\d+\s*M6' -and $inLaserMode.Value) {
+        $inLaserMode.Value = $false
+        # Return laser teardown with safe retract, then tool change, then pause for boot reinstall
+        $teardownLines = @(
+            "(--- End Laser Paths ---)",
+            "M5 (Laser off)",
+            "M322 (Disable laser mode)",
+            "G0 Z20 (Safe Z retract)",
+            "G54 (Ensure G54 WCS)",
+            $line
+        )
+        if ($laserPauseEnabled) {
+            $teardownLines += "M600 (Reinstall vacuum boot)"
+        }
+        return $teardownLines
+    }
+
+    # If not in laser mode, return line unchanged
+    if (-not $inLaserMode.Value) {
+        return @($line)
+    }
+
+    # In laser mode - process laser-specific transformations
+
+    # Handle spindle/power commands - detect power changes
+    if ($trimmedLine -match '^S(\d+)\s*M3' -or $trimmedLine -match '^M3\s*S(\d+)') {
+        $newPower = [int]$matches[1]
+        $laserStarted.Value = $true
+
+        # If power changed, output M325 command
+        if ($newPower -ne $currentLaserPower.Value) {
+            $currentLaserPower.Value = $newPower
+            $newPowerPercent = [math]::Round($newPower / 10)
+            return @("M325 S$newPowerPercent (Change laser power to $newPowerPercent%)")
+        }
+        return @()
+    }
+
+    # Strip standalone spindle commands in laser mode
+    if ($trimmedLine -match '^M3$') {
+        return @()
+    }
+
+    # Strip G54/G55 WCS commands in laser mode - we manage WCS ourselves
+    if ($trimmedLine -match '^G5[45]$') {
+        return @()
+    }
+
+    # Handle Z moves in laser mode - detect lifts (Z positive) vs plunges (Z negative/zero)
+    # Check for Z-only lines (bare Z2, Z0, etc.) or G0/G1 Z moves
+    $zMatch = $null
+    if ($trimmedLine -match '^Z([-\d\.]+)') {
+        $zMatch = $matches[1]
+    } elseif ($trimmedLine -match '^G[01]\s+Z([-\d\.]+)') {
+        $zMatch = $matches[1]
+    }
+
+    if ($null -ne $zMatch) {
+        $zValue = [double]$zMatch
+        if ($zValue -gt 0) {
+            # Positive Z = lift/retract = laser should be off for next move
+            $laserLifted.Value = $true
+        } else {
+            # Zero or negative Z = plunge = laser back on
+            $laserLifted.Value = $false
+        }
+        return @()
+    }
+
+    # Handle G0 rapid moves in laser mode - extract XY and output as G0 (repositioning)
+    if ($trimmedLine -match '^G0\s') {
+        $xCoord = ""
+        $yCoord = ""
+        if ($line -match 'X([-\d\.]+)') { $xCoord = "X$($matches[1])" }
+        if ($line -match 'Y([-\d\.]+)') { $yCoord = "Y$($matches[1])" }
+
+        # If there are XY coordinates, output as G0 repositioning move
+        if ($xCoord -ne "" -or $yCoord -ne "") {
+            $laserLifted.Value = $true  # G0 means we're repositioning, laser off
+            return @("G0 $xCoord $yCoord".Trim())
+        }
+        # No coordinates, just strip it
+        return @()
+    }
+
+    # Track XY from ramp/entry moves (lines with Z component) but don't output them
+    if ($line -match 'Z([-\d\.]+)') {
+        $zValue = [double]$matches[1]
+        # Update lifted state based on Z value
+        if ($zValue -gt 0) {
+            $laserLifted.Value = $true
+        } else {
+            $laserLifted.Value = $false
+        }
+        # Save the X and Y coordinates from ramp moves
+        if ($line -match 'X([-\d\.]+)') {
+            $lastRampX.Value = $matches[1]
+        }
+        if ($line -match 'Y([-\d\.]+)') {
+            $lastRampY.Value = $matches[1]
+        }
+        return @()
+    }
+
+    # Build the output line with explicit G0 or G1
+    # Extract coordinates from the line
+    $xCoord = ""
+    $yCoord = ""
+    $fValue = ""
+
+    if ($line -match 'X([-\d\.]+)') { $xCoord = "X$($matches[1])" }
+    if ($line -match 'Y([-\d\.]+)') { $yCoord = "Y$($matches[1])" }
+    if ($line -match 'F([\d\.]+)') { $fValue = "F$($matches[1])" }
+
+    # If no coordinates found, skip this line (comments, blank lines, etc.)
+    if ($xCoord -eq "" -and $yCoord -eq "") {
+        return @()
+    }
+
+    # For the first actual laser move, use saved coordinates from ramp if needed
+    $isFirstMove = $firstLaserMove.Value
+    if ($firstLaserMove.Value) {
+        $firstLaserMove.Value = $false
+        if ($xCoord -eq "" -and $null -ne $lastRampX.Value) {
+            $xCoord = "X$($lastRampX.Value)"
+        }
+        if ($yCoord -eq "" -and $null -ne $lastRampY.Value) {
+            $yCoord = "Y$($lastRampY.Value)"
+        }
+    }
+
+    # Build the output with explicit G command
+    # First move is always G0 (positioning without firing)
+    if ($isFirstMove -or $laserLifted.Value) {
+        # First move or lifted state = G0 rapid move (laser off)
+        $outputLine = "G0 $xCoord $yCoord".Trim()
+    } else {
+        # Not lifted = G1 cutting move (laser on)
+        $parts = @("G1", $xCoord, $yCoord)
+        if ($fValue -ne "") { $parts += $fValue }
+        $outputLine = ($parts | Where-Object { $_ -ne "" }) -join " "
+    }
+
+    return @($outputLine)
+}
+
+# Function to merge G-code files
+function Merge-GCodeFiles {
+    param([bool]$laserPauseEnabled = $true)
+
+    $sortedFiles = $script:fileList | Sort-Object -Property Sequence
+    $outputFolder = [System.IO.Path]::GetDirectoryName($sortedFiles[0].Path)
+    $prefix = $sortedFiles[0].Prefix
+    $outputPath = Join-Path $outputFolder "$prefix-merged.cnc"
+
+    $mergedContent = New-Object System.Text.StringBuilder
+
+    # Header patterns to skip in subsequent files
+    $headerPatterns = @(
+        '^\(.*\)$',           # Comments at start
+        '^G90\s*G94',         # Absolute positioning
+        '^G17$',              # XY plane
+        '^G21$',              # Metric
+        '^G54$'               # Work coordinate system
+    )
+
+    # Footer patterns to remove from all but last file
+    $footerPatterns = @(
+        '^M5$',               # Spindle stop
+        '^G28$',              # Return home
+        '^M30$'               # Program end
+    )
+
+    # Pre-scan all files to find T99 laser setup info
+    $laserSetupInfo = @{ FirstX = $null; FirstY = $null; LaserPower = $null }
+    foreach ($file in $sortedFiles) {
+        $fileLines = Get-Content -Path $file.Path
+        $hasT99 = $fileLines | Where-Object { $_ -match '^T99\s*M6' }
+        if ($hasT99) {
+            $laserSetupInfo = Get-LaserSetupInfo -lines $fileLines
+            break
+        }
+    }
+
+    # Track laser mode across all files
+    $inLaserMode = $false
+    $laserStarted = $false
+    $lastRampX = $null
+    $lastRampY = $null
+    $firstLaserMove = $true
+    $laserLifted = $false
+    $currentLaserPower = 0
+
+    for ($i = 0; $i -lt $sortedFiles.Count; $i++) {
+        $file = $sortedFiles[$i]
+        $isFirst = ($i -eq 0)
+        $isLast = ($i -eq $sortedFiles.Count - 1)
+
+        $lines = Get-Content -Path $file.Path
+
+        # Add source file comment
+        [void]$mergedContent.AppendLine("")
+        [void]$mergedContent.AppendLine("(--- Start of $($file.FileName).cnc ---)")
+
+        $inHeader = $true
+
+        foreach ($line in $lines) {
+            $trimmedLine = $line.Trim()
+
+            # Skip empty lines at the very start
+            if ($trimmedLine -eq "" -and $mergedContent.Length -eq 0) {
+                continue
+            }
+
+            # Check if this is a header line
+            $isHeaderLine = $false
+            if ($inHeader) {
+                foreach ($pattern in $headerPatterns) {
+                    if ($trimmedLine -match $pattern) {
+                        $isHeaderLine = $true
+                        break
+                    }
+                }
+
+                # Header ends when we hit a tool command or non-header G-code
+                if ($trimmedLine -match '^T\d+\s*M6' -or ($trimmedLine -match '^[GXY]' -and -not $isHeaderLine)) {
+                    $inHeader = $false
+                }
+            }
+
+            # Skip header lines for non-first files
+            if (-not $isFirst -and $isHeaderLine -and $inHeader) {
+                continue
+            }
+
+            # Check if this is a footer line
+            $isFooterLine = $false
+            foreach ($pattern in $footerPatterns) {
+                if ($trimmedLine -match $pattern) {
+                    $isFooterLine = $true
+                    break
+                }
+            }
+
+            # Skip footer lines for non-last files
+            if (-not $isLast -and $isFooterLine) {
+                continue
+            }
+
+            # Process line for laser transformation
+            $processedLines = Process-LaserLine -line $line -trimmedLine $trimmedLine -inLaserMode ([ref]$inLaserMode) -laserStarted ([ref]$laserStarted) -lastRampX ([ref]$lastRampX) -lastRampY ([ref]$lastRampY) -firstLaserMove ([ref]$firstLaserMove) -laserLifted ([ref]$laserLifted) -currentLaserPower ([ref]$currentLaserPower) -fileName $file.FileName -laserSetupInfo $laserSetupInfo -laserPauseEnabled $laserPauseEnabled
+
+            foreach ($processedLine in $processedLines) {
+                if ($processedLine -ne $null -and $processedLine -ne '') {
+                    [void]$mergedContent.AppendLine($processedLine)
+                }
+            }
+        }
+
+        # If file ends while still in laser mode and this is the last file, add laser teardown
+        if ($isLast -and $inLaserMode) {
+            [void]$mergedContent.AppendLine("(--- End Laser Paths ---)")
+            [void]$mergedContent.AppendLine("M5 (Laser off)")
+            [void]$mergedContent.AppendLine("M322 (Disable laser mode)")
+            [void]$mergedContent.AppendLine("G0 Z20 (Safe Z retract)")
+            [void]$mergedContent.AppendLine("G54 (Ensure G54 WCS)")
+            if ($laserPauseEnabled) {
+                [void]$mergedContent.AppendLine("M600 (Reinstall vacuum boot)")
+            }
+        }
+
+        [void]$mergedContent.AppendLine("(--- End of $($file.FileName).cnc ---)")
+    }
+
+    # Write the merged file
+    $mergedContent.ToString() | Out-File -FilePath $outputPath -Encoding ASCII
+
+    return $outputPath
+}
+
+# Drag enter event
+$form.Add_DragEnter({
+    if ($_.Data.GetDataPresent([Windows.Forms.DataFormats]::FileDrop)) {
+        $_.Effect = [Windows.Forms.DragDropEffects]::Copy
+        $dropLabel.BackColor = [System.Drawing.Color]::FromArgb(200, 255, 200)
+    }
+})
+
+# Drag leave event
+$form.Add_DragLeave({
+    $dropLabel.BackColor = [System.Drawing.Color]::FromArgb(240, 240, 240)
+})
+
+# Drop event
+$form.Add_DragDrop({
+    $dropLabel.BackColor = [System.Drawing.Color]::FromArgb(240, 240, 240)
+
+    $files = $_.Data.GetData([Windows.Forms.DataFormats]::FileDrop)
+
+    foreach ($filePath in $files) {
+        # Only accept .cnc files
+        if ([System.IO.Path]::GetExtension($filePath).ToLower() -ne ".cnc") {
+            $statusLabel.Text = "Skipped non-.cnc file: $([System.IO.Path]::GetFileName($filePath))"
+            $statusLabel.ForeColor = [System.Drawing.Color]::DarkOrange
+            continue
+        }
+
+        # Skip already-merged files
+        $fileName = [System.IO.Path]::GetFileNameWithoutExtension($filePath)
+        if ($fileName -match '-merged$') {
+            $statusLabel.Text = "Skipped merged file: $([System.IO.Path]::GetFileName($filePath))"
+            $statusLabel.ForeColor = [System.Drawing.Color]::DarkOrange
+            continue
+        }
+
+        $parsed = Parse-FileName -filePath $filePath
+
+        if ($null -eq $parsed) {
+            $statusLabel.Text = "Invalid filename format: $([System.IO.Path]::GetFileName($filePath))`nExpected: prefix-number.cnc"
+            $statusLabel.ForeColor = [System.Drawing.Color]::DarkRed
+            continue
+        }
+
+        # Check for duplicates
+        $exists = $script:fileList | Where-Object { $_.Path -eq $filePath }
+        if ($null -eq $exists) {
+            [void]$script:fileList.Add($parsed)
+        }
+    }
+
+    Update-UI
+})
+
+# Clear button click
+$clearButton.Add_Click({
+    $script:fileList = [System.Collections.ArrayList]::new()
+    $listBox.Items.Clear()
+    $statusLabel.Text = ""
+    $statusLabel.ForeColor = [System.Drawing.Color]::Black
+    $mergeButton.Enabled = $false
+})
+
+# Merge button click
+$mergeButton.Add_Click({
+    try {
+        $statusLabel.Text = "Merging files..."
+        $statusLabel.ForeColor = [System.Drawing.Color]::DarkBlue
+        $form.Refresh()
+
+        $outputPath = Merge-GCodeFiles -laserPauseEnabled $laserPauseCheckbox.Checked
+
+        $statusLabel.Text = "Success! Created:`n$([System.IO.Path]::GetFileName($outputPath))"
+        $statusLabel.ForeColor = [System.Drawing.Color]::DarkGreen
+    }
+    catch {
+        $statusLabel.Text = "Error: $($_.Exception.Message)"
+        $statusLabel.ForeColor = [System.Drawing.Color]::DarkRed
+    }
+})
+
+# Function to add files from command line arguments
+function Add-FilesFromArgs {
+    param([string[]]$filePaths)
+
+    foreach ($filePath in $filePaths) {
+        if (-not (Test-Path $filePath)) {
+            continue
+        }
+
+        # Only accept .cnc files
+        if ([System.IO.Path]::GetExtension($filePath).ToLower() -ne ".cnc") {
+            continue
+        }
+
+        # Skip already-merged files
+        $fileName = [System.IO.Path]::GetFileNameWithoutExtension($filePath)
+        if ($fileName -match '-merged$') {
+            continue
+        }
+
+        $parsed = Parse-FileName -filePath $filePath
+
+        if ($null -eq $parsed) {
+            continue
+        }
+
+        # Check for duplicates
+        $exists = $script:fileList | Where-Object { $_.Path -eq $filePath }
+        if ($null -eq $exists) {
+            [void]$script:fileList.Add($parsed)
+        }
+    }
+}
+
+# Pre-load files if passed as command line arguments
+if ($args.Count -gt 0) {
+    [void](Add-FilesFromArgs -filePaths $args)
+    [void](Update-UI)
+}
+
+# Show the form
+[void]$form.ShowDialog()

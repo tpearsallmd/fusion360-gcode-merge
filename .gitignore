@@ -1,0 +1,11 @@
+# Claude Code local settings
+.claude/
+
+# Sample/test files
+Samples Files/
+
+# Debug scripts
+find-jumps.ps1
+
+# Reddit draft
+RedditIntro.md
