@@ -10,6 +10,8 @@ Fusion 360 Personal Use license does not allow exporting G-code with multiple to
 
 This utility merges sequenced G-code files into a single file that can be run on CNC machines with ATC support. It also automatically transforms dummy tool T99 operations into proper Carvera laser G-code, complete with surface probing for correct focal height.
 
+![Screenshot](Screenshot.jpg)
+
 ## Features
 
 - Drag-and-drop GUI interface
