@@ -28,6 +28,21 @@ This utility merges sequenced G-code files into a single file that can be run on
 - Automatically transforms dummy tool T99 into laser G-code
 - Optional M600 pauses for vacuum boot removal/reinstallation (checkbox in UI)
 
+## ⚠️ Safety Warning & Disclaimer
+
+**This software manipulates G-code that controls CNC machinery. Improper use can result in:**
+- Damaged tools, workpieces, or machine
+- Personal injury
+- Fire (especially with laser operations)
+
+**Before running merged G-code:**
+1. Review the merged file in a G-code viewer/simulator
+2. Stay within reach of the emergency stop button during the first run
+3. Start with conservative feeds and speeds until you're confident in the output
+4. Never leave laser operations unattended
+
+**Disclaimer:** This software is provided "as is" without warranty of any kind. The authors are not responsible for any damage to equipment, property, or persons resulting from the use of this software or G-code produced by it. Use at your own risk.
+
 ## Requirements
 
 - Windows 10/11
