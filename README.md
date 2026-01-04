@@ -104,6 +104,13 @@ The Carvera CNC has a laser module, but Fusion 360 doesn't natively support it. 
 
 When T99 is detected in the G-code, the utility automatically handles the complete laser workflow including surface probing for correct focal height.
 
+**Job Start** (added to beginning of merged file):
+
+```gcode
+G54                     ; Ensure G54 is active
+G10 L20 P2 X0 Y0 Z0     ; Backup G54 origin to G55
+```
+
 **Laser Start Sequence** (replaces `T99 M6`):
 
 ```gcode
@@ -114,16 +121,15 @@ G54                     ; Ensure G54 WCS
 G0 Z20                  ; Safe Z height
 G0 X## Y##              ; Move to first laser position
 G38.2 Z-50 F100         ; Probe surface
-G10 L20 P2 Z0           ; Set G55 Z0 to probed surface (preserves G54)
+G10 L20 P1 Z0           ; Set G54 Z0 to probed surface
 G0 Z5                   ; Retract after probe
-M321                    ; Enable laser mode (auto-returns probe)
-G55                     ; Switch to G55 for laser operations
+M321                    ; Enable laser mode (auto-returns probe, applies offset)
 G0 Z0                   ; Move to laser focal height
 M325 S##                ; Set laser power (0-100%)
 M3                      ; Enable laser firing
 ```
 
-**Note:** The probe sets G55 Z0 to the actual surface height while preserving G54 Z0 (original stock top). This allows subsequent milling operations to use the correct Z reference.
+**Note:** G55 serves as a backup of the original G54 coordinates. The laser probing modifies G54 Z0 to the actual surface, and M321 applies additional coordinate transformations for the laser module. After laser operations, G54 is restored from the G55 backup.
 
 **During Laser Operation**:
 
@@ -138,12 +144,14 @@ M3                      ; Enable laser firing
 M5                      ; Laser off
 M322                    ; Disable laser mode
 G0 Z20                  ; Safe retract
-G54                     ; Restore G54 WCS (original stock top Z0)
+G55                     ; Switch to G55 (backup of original G54)
+G10 L20 P1 X0 Y0 Z0     ; Restore G54 from G55 backup
+G54                     ; Switch back to G54 for milling
 T# M6                   ; Next tool change (if applicable)
 M600                    ; Pause - reinstall vacuum boot (optional)
 ```
 
-Note: The tool change happens before the M600 pause so the spindle is raised and out of the way when reinstalling the vacuum boot.
+Note: The G54 restoration from G55 ensures subsequent milling operations use the original work coordinate system. The tool change happens before the M600 pause so the spindle is raised and out of the way when reinstalling the vacuum boot.
 
 **Multiple Consecutive Laser Operations:** If you have two or more T99 laser operations in a row (without milling operations between them), the surface is only probed once at the start of the first laser operation. All consecutive laser operations are assumed to be at the same surface height. If your laser operations are on surfaces at different heights, separate them with a non-laser operation or manually adjust the G-code.
 

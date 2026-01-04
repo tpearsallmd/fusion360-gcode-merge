@@ -305,6 +305,8 @@ function Process-LaserLine {
         $currentLaserPower.Value = $spindleSpeed
 
         # Build laser setup sequence
+        # Strategy: G55 was backed up from G54 at job start. Let M321 modify G54 freely.
+        # After laser, we'll restore G54 from G55.
         $setupLines = @(
             "(--- Begin Laser Setup ---)",
             "M5 (Spindle stop)",
@@ -313,17 +315,15 @@ function Process-LaserLine {
         if ($laserPauseEnabled) {
             $setupLines += "M600 (Remove vacuum boot for laser engraving)"
         }
-        # Probe surface and use G10 L20 to set G55 Z0 at probed surface
-        # After M321, switch to G55 so Z0 is at the actual surface
+        # Probe surface, let M321 do its coordinate transformation, then go to Z0
         $setupLines += @(
             "G54 (Ensure G54 WCS)",
             "G0 Z20 (Safe Z height)",
             "G0 X$probeX Y$probeY (Move to first laser position)",
             "G38.2 Z-50 F100 (Probe surface)",
-            "G10 L20 P2 Z0 (Set G55 Z0 to probed surface while still at surface)",
+            "G10 L20 P1 Z0 (Set G54 Z0 to probed surface)",
             "G0 Z5 (Retract after probe)",
-            "M321 (Enable laser mode - returns probe automatically)",
-            "G55 (Switch to G55 - Z0 is at probed surface)",
+            "M321 (Enable laser mode - returns probe, applies laser offset)",
             "G0 Z0 (Move to laser focal height)",
             "M325 S$laserPowerPercent (Set laser power $laserPowerPercent%)",
             "M3 (Enable laser firing)",
@@ -335,13 +335,16 @@ function Process-LaserLine {
     # Detect other tool change - end laser mode if active
     if ($trimmedLine -match '^T\d+\s*M6' -and $inLaserMode.Value) {
         $inLaserMode.Value = $false
-        # Return laser teardown with safe retract, then tool change
+        # Return laser teardown with safe retract, restore G54 from G55, then tool change
         $teardownLines = @(
             "(--- End Laser Paths ---)",
             "M5 (Laser off)",
             "M322 (Disable laser mode)",
             "G0 Z20 (Safe Z retract)",
-            "G54 (Restore G54 WCS for milling)",
+            "(--- Restore G54 from G55 backup ---)",
+            "G55 (Switch to G55 - our backup of original G54)",
+            "G10 L20 P1 X0 Y0 Z0 (Restore G54 from G55)",
+            "G54 (Switch back to G54 for milling)",
             $line
         )
         if ($laserPauseEnabled) {
@@ -545,6 +548,13 @@ function Merge-GCodeFiles {
     $laserLifted = $false
     $currentLaserPower = 0
 
+    # Add G54→G55 backup at the very start of the merged file
+    # This preserves the original G54 WCS so we can restore it after laser operations
+    [void]$mergedContent.AppendLine("(--- Backup G54 to G55 for laser recovery ---)")
+    [void]$mergedContent.AppendLine("G54 (Ensure G54 is active)")
+    [void]$mergedContent.AppendLine("G10 L20 P2 X0 Y0 Z0 (Copy G54 origin to G55)")
+    [void]$mergedContent.AppendLine("")
+
     for ($i = 0; $i -lt $sortedFiles.Count; $i++) {
         $file = $sortedFiles[$i]
         $isFirst = ($i -eq 0)
@@ -622,7 +632,10 @@ function Merge-GCodeFiles {
             [void]$mergedContent.AppendLine("M5 (Laser off)")
             [void]$mergedContent.AppendLine("M322 (Disable laser mode)")
             [void]$mergedContent.AppendLine("G0 Z20 (Safe Z retract)")
-            [void]$mergedContent.AppendLine("G54 (Restore G54 WCS - original stock top Z0)")
+            [void]$mergedContent.AppendLine("(--- Restore G54 from G55 backup ---)")
+            [void]$mergedContent.AppendLine("G55 (Switch to G55 - our backup of original G54)")
+            [void]$mergedContent.AppendLine("G10 L20 P1 X0 Y0 Z0 (Restore G54 from G55)")
+            [void]$mergedContent.AppendLine("G54 (Switch back to G54)")
             if ($laserPauseEnabled) {
                 [void]$mergedContent.AppendLine("M600 (Reinstall vacuum boot)")
             }
