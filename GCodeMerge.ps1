@@ -315,16 +315,14 @@ function Process-LaserLine {
         if ($laserPauseEnabled) {
             $setupLines += "M600 (Remove vacuum boot for laser engraving)"
         }
-        # Probe surface, let M321 do its coordinate transformation, then go to Z0
+        # Probe surface, let M321 handle the Z positioning
+        # G38.2 probe sets Z position, M321 uses that to position laser at focal height
         $setupLines += @(
             "G54 (Ensure G54 WCS)",
             "G0 Z20 (Safe Z height)",
             "G0 X$probeX Y$probeY (Move to first laser position)",
-            "G38.2 Z-50 F100 (Probe surface)",
-            "G10 L20 P1 Z0 (Set G54 Z0 to probed surface)",
-            "G0 Z5 (Retract after probe)",
-            "M321 (Enable laser mode - returns probe, applies laser offset)",
-            "G0 Z0 (Move to laser focal height)",
+            "G38.2 Z-50 F100 (Probe surface - M321 uses this for focal height)",
+            "M321 (Enable laser mode - returns probe, positions at focal height)",
             "M325 S$laserPowerPercent (Set laser power $laserPowerPercent%)",
             "M3 (Enable laser firing)",
             "(--- Begin Laser Paths ---)"
