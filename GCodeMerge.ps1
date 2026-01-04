@@ -319,7 +319,7 @@ function Process-LaserLine {
             "G0 Z20 (Safe Z height)",
             "G0 X$probeX Y$probeY (Move to first laser position)",
             "G38.2 Z-50 F100 (Probe surface)",
-            "G10 L20 P2 Z0 (Set G55 Z0 to probed surface - preserves G54)",
+            "G10 L20 P2 X$probeX Y$probeY Z0 (Set G55 to match G54 X/Y, with Z0 at probed surface)",
             "G0 Z5 (Retract after probe)",
             "M321 (Enable laser mode - returns probe automatically)",
             "G55 (Switch to G55 for laser)",
