@@ -313,14 +313,16 @@ function Process-LaserLine {
         if ($laserPauseEnabled) {
             $setupLines += "M600 (Remove vacuum boot for laser engraving)"
         }
+        # Use G55 for laser to preserve G54 (original stock top) for subsequent milling
         $setupLines += @(
             "G54 (Ensure G54 WCS)",
             "G0 Z20 (Safe Z height)",
             "G0 X$probeX Y$probeY (Move to first laser position)",
             "G38.2 Z-50 F100 (Probe surface)",
+            "G10 L20 P2 Z0 (Set G55 Z0 to probed surface - preserves G54)",
             "G0 Z5 (Retract after probe)",
             "M321 (Enable laser mode - returns probe automatically)",
-            "G54 (Re-confirm G54 WCS after M321)",
+            "G55 (Switch to G55 for laser)",
             "G0 Z0 (Move to laser focal height)",
             "M325 S$laserPowerPercent (Set laser power $laserPowerPercent%)",
             "M3 (Enable laser firing)",
@@ -338,7 +340,7 @@ function Process-LaserLine {
             "M5 (Laser off)",
             "M322 (Disable laser mode)",
             "G0 Z20 (Safe Z retract)",
-            "G54 (Ensure G54 WCS)",
+            "G54 (Restore G54 WCS for milling - original stock top Z0)",
             $line
         )
         if ($laserPauseEnabled) {
@@ -619,7 +621,7 @@ function Merge-GCodeFiles {
             [void]$mergedContent.AppendLine("M5 (Laser off)")
             [void]$mergedContent.AppendLine("M322 (Disable laser mode)")
             [void]$mergedContent.AppendLine("G0 Z20 (Safe Z retract)")
-            [void]$mergedContent.AppendLine("G54 (Ensure G54 WCS)")
+            [void]$mergedContent.AppendLine("G54 (Restore G54 WCS - original stock top Z0)")
             if ($laserPauseEnabled) {
                 [void]$mergedContent.AppendLine("M600 (Reinstall vacuum boot)")
             }
