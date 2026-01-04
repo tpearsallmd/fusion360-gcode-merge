@@ -114,13 +114,16 @@ G54                     ; Ensure G54 WCS
 G0 Z20                  ; Safe Z height
 G0 X## Y##              ; Move to first laser position
 G38.2 Z-50 F100         ; Probe surface
+G10 L20 P2 Z0           ; Set G55 Z0 to probed surface (preserves G54)
 G0 Z5                   ; Retract after probe
 M321                    ; Enable laser mode (auto-returns probe)
-G54                     ; Re-confirm G54 WCS after M321
+G55                     ; Switch to G55 for laser operations
 G0 Z0                   ; Move to laser focal height
 M325 S##                ; Set laser power (0-100%)
 M3                      ; Enable laser firing
 ```
+
+**Note:** The probe sets G55 Z0 to the actual surface height while preserving G54 Z0 (original stock top). This allows subsequent milling operations to use the correct Z reference.
 
 **During Laser Operation**:
 
@@ -135,12 +138,14 @@ M3                      ; Enable laser firing
 M5                      ; Laser off
 M322                    ; Disable laser mode
 G0 Z20                  ; Safe retract
-G54                     ; Ensure G54 WCS
+G54                     ; Restore G54 WCS (original stock top Z0)
 T# M6                   ; Next tool change (if applicable)
 M600                    ; Pause - reinstall vacuum boot (optional)
 ```
 
 Note: The tool change happens before the M600 pause so the spindle is raised and out of the way when reinstalling the vacuum boot.
+
+**Multiple Consecutive Laser Operations:** If you have two or more T99 laser operations in a row (without milling operations between them), the surface is only probed once at the start of the first laser operation. All consecutive laser operations are assumed to be at the same surface height. If your laser operations are on surfaces at different heights, separate them with a non-laser operation or manually adjust the G-code.
 
 ### Why Surface Probing?
 
@@ -196,6 +201,10 @@ To rebuild the executable after modifying the PowerShell script:
 
 - Fusion 360 Personal Use
 - Makera Carvera 3-axis CNC with ATC
+
+## Future Enhancements
+
+- [ ] **Per-operation laser probing** - Option to probe for each laser operation when multiple T99 operations target different surface heights (e.g., engraving on stepped surfaces or pockets at different depths)
 
 ## License
 
