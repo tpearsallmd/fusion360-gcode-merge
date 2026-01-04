@@ -314,14 +314,16 @@ function Process-LaserLine {
             $setupLines += "M600 (Remove vacuum boot for laser engraving)"
         }
         # Use G55 for laser to preserve G54 (original stock top) for subsequent milling
+        # Set G55 AFTER M321 since M321 may reset WCS offsets
         $setupLines += @(
             "G54 (Ensure G54 WCS)",
             "G0 Z20 (Safe Z height)",
             "G0 X$probeX Y$probeY (Move to first laser position)",
             "G38.2 Z-50 F100 (Probe surface)",
-            "G10 L20 P2 X$probeX Y$probeY Z0 (Set G55 to match G54 X/Y, with Z0 at probed surface)",
             "G0 Z5 (Retract after probe)",
             "M321 (Enable laser mode - returns probe automatically)",
+            "G0 X$probeX Y$probeY (Return to probe position)",
+            "G10 L20 P2 X$probeX Y$probeY Z0 (Set G55 to match G54 X/Y, with Z0 at laser focal height)",
             "G55 (Switch to G55 for laser)",
             "G0 Z0 (Move to laser focal height)",
             "M325 S$laserPowerPercent (Set laser power $laserPowerPercent%)",
