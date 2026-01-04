@@ -313,15 +313,17 @@ function Process-LaserLine {
         if ($laserPauseEnabled) {
             $setupLines += "M600 (Remove vacuum boot for laser engraving)"
         }
-        # Simple G54 approach - let M321 handle coordinate transformation
+        # Probe surface and use G10 L20 to set G55 Z0 at probed surface
+        # After M321, switch to G55 so Z0 is at the actual surface
         $setupLines += @(
             "G54 (Ensure G54 WCS)",
             "G0 Z20 (Safe Z height)",
             "G0 X$probeX Y$probeY (Move to first laser position)",
             "G38.2 Z-50 F100 (Probe surface)",
+            "G10 L20 P2 Z0 (Set G55 Z0 to probed surface while still at surface)",
             "G0 Z5 (Retract after probe)",
             "M321 (Enable laser mode - returns probe automatically)",
-            "G54 (Re-confirm G54 WCS after M321)",
+            "G55 (Switch to G55 - Z0 is at probed surface)",
             "G0 Z0 (Move to laser focal height)",
             "M325 S$laserPowerPercent (Set laser power $laserPowerPercent%)",
             "M3 (Enable laser firing)",
@@ -339,7 +341,7 @@ function Process-LaserLine {
             "M5 (Laser off)",
             "M322 (Disable laser mode)",
             "G0 Z20 (Safe Z retract)",
-            "G54 (Ensure G54 WCS)",
+            "G54 (Restore G54 WCS for milling)",
             $line
         )
         if ($laserPauseEnabled) {
