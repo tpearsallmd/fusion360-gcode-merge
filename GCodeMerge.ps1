@@ -332,7 +332,7 @@ function Process-LaserLine {
     # Detect other tool change - end laser mode if active
     if ($trimmedLine -match '^T\d+\s*M6' -and $inLaserMode.Value) {
         $inLaserMode.Value = $false
-        # Return laser teardown with safe retract, then tool change, then pause for boot reinstall
+        # Return laser teardown with safe retract, then tool change
         $teardownLines = @(
             "(--- End Laser Paths ---)",
             "M5 (Laser off)",
