@@ -333,20 +333,14 @@ function Process-LaserLine {
         $teardownLines = @(
             "(--- End Laser Paths ---)",
             "M5 (Laser off)",
-            "M322 (Disable laser mode)",
-            "G54 (Ensure G54 active after laser mode)",
-            "G0 Z20 (Safe Z retract)"
+            "M322 (Disable laser mode - restores X/Y offsets automatically)",
+            "G54 (Stabilize coordinate system after M322)",
+            "G53 G0 Z-5 (Safe Z retract in machine coords)"
         )
         if ($laserPauseEnabled) {
             $teardownLines += "M600 (Reinstall vacuum boot and laser cap)"
         }
-        $teardownLines += @(
-            "(--- Restore G54 from G55 backup ---)",
-            "G55 (Switch to G55 - our backup of original G54)",
-            "G10 L20 P1 X0 Y0 Z0 (Restore G54 from G55)",
-            "G54 (Switch back to G54 for milling)",
-            $line
-        )
+        $teardownLines += $line
         return $teardownLines
     }
 
@@ -684,15 +678,11 @@ function Merge-GCodeFiles {
             [void]$mergedContent.AppendLine("(--- End Laser Paths ---)")
             [void]$mergedContent.AppendLine("M5 (Laser off)")
             [void]$mergedContent.AppendLine("M322 (Disable laser mode)")
-            [void]$mergedContent.AppendLine("G54 (Ensure G54 active after laser mode)")
-            [void]$mergedContent.AppendLine("G0 Z20 (Safe Z retract)")
+            [void]$mergedContent.AppendLine("G54 (Stabilize coordinate system after M322)")
+            [void]$mergedContent.AppendLine("G53 G0 Z-5 (Safe Z retract in machine coords)")
             if ($laserPauseEnabled) {
                 [void]$mergedContent.AppendLine("M600 (Reinstall vacuum boot and laser cap)")
             }
-            [void]$mergedContent.AppendLine("(--- Restore G54 from G55 backup ---)")
-            [void]$mergedContent.AppendLine("G55 (Switch to G55 - our backup of original G54)")
-            [void]$mergedContent.AppendLine("G10 L20 P1 X0 Y0 Z0 (Restore G54 from G55)")
-            [void]$mergedContent.AppendLine("G54 (Switch back to G54)")
         }
 
         [void]$mergedContent.AppendLine("(--- End of $($file.FileName).cnc ---)")
