@@ -152,16 +152,6 @@ Note: The G54 restoration from G55 ensures subsequent milling operations use the
 
 **Multiple Consecutive Laser Operations:** If you have two or more T99 laser operations in a row (without milling operations between them), the surface is only probed once at the start of the first laser operation. All consecutive laser operations are assumed to be at the same surface height. If your laser operations are on surfaces at different heights, separate them with a non-laser operation or manually adjust the G-code.
 
-### Why Surface Probing?
-
-If you mill your part before laser engraving (removing material), the surface height changes. The probing sequence:
-
-1. Uses the Carvera's wireless probe (T0) to measure the actual surface height
-2. Positions the laser at Z0 (focal height) relative to the probed surface
-3. All laser operations run at this fixed Z0 height
-
-This ensures the laser focal point is always correct, regardless of how much material was removed before the laser operation.
-
 ### Validation
 
 - Laser power must be between 0-1000 (0-100%)
