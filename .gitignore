@@ -1,3 +1,6 @@
 # Claude Code local settings
 .claude/
 
+# Built executable (users can build with ps2exe)
+*.exe
+

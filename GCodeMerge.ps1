@@ -274,6 +274,7 @@ function Process-LaserLine {
         [ref]$laserLifted,
         [ref]$currentLaserPower,
         [ref]$currentFeedrate,
+        [ref]$laserCuttingDepth,
         [string]$fileName,
         [hashtable]$laserSetupInfo,
         [bool]$laserPauseEnabled
@@ -287,6 +288,7 @@ function Process-LaserLine {
         $lastRampY.Value = $null
         $firstLaserMove.Value = $true
         $laserLifted.Value = $true  # Start lifted so first move is G0 positioning
+        $laserCuttingDepth.Value = $null  # Will be set on first plunge
 
         # Validate laser power
         if ($null -ne $laserSetupInfo.LaserPower -and $laserSetupInfo.LaserPower -gt 1000) {
@@ -332,6 +334,7 @@ function Process-LaserLine {
             "(--- End Laser Paths ---)",
             "M5 (Laser off)",
             "M322 (Disable laser mode)",
+            "G54 (Ensure G54 active after laser mode)",
             "G0 Z20 (Safe Z retract)"
         )
         if ($laserPauseEnabled) {
@@ -393,12 +396,28 @@ function Process-LaserLine {
         if ($line -match 'F([\d\.]+)') {
             $currentFeedrate.Value = $matches[1]
         }
+
+        # Positive Z is always a lift (above workpiece)
         if ($zValue -gt 0) {
-            # Positive Z = lift/retract = laser should be off for next move
             $laserLifted.Value = $true
             return @()  # Don't output retracts
+        }
+
+        # Track the deepest negative Z as cutting depth
+        if ($null -eq $laserCuttingDepth.Value -or $zValue -lt $laserCuttingDepth.Value) {
+            $laserCuttingDepth.Value = $zValue
+        }
+
+        # Determine if this Z is a "lift" (shallower than cutting depth) or at cutting depth
+        # A lift is when Z is more than 0.1mm above the cutting depth
+        $isLift = $null -ne $laserCuttingDepth.Value -and $zValue -gt ($laserCuttingDepth.Value + 0.1)
+
+        if ($isLift) {
+            # Partial lift (e.g., Z-3.46 when cutting at Z-4.45) = laser off
+            $laserLifted.Value = $true
+            return @()  # Don't output lift moves
         } else {
-            # Zero or negative Z = plunge to cutting depth
+            # At cutting depth = plunge
             # Pass through the first plunge, skip subsequent ones
             if ($firstLaserMove.Value) {
                 $laserLifted.Value = $false
@@ -429,12 +448,25 @@ function Process-LaserLine {
     # Handle lines with Z component (ramp/entry moves)
     if ($line -match 'Z([-\d\.]+)') {
         $zValue = [double]$matches[1]
-        # Update lifted state based on Z value
+
+        # Positive Z is always a lift
         if ($zValue -gt 0) {
             $laserLifted.Value = $true
-        } else {
-            $laserLifted.Value = $false
+            # Save XY from ramp moves
+            if ($line -match 'X([-\d\.]+)') { $lastRampX.Value = $matches[1] }
+            if ($line -match 'Y([-\d\.]+)') { $lastRampY.Value = $matches[1] }
+            return @()
         }
+
+        # Track cutting depth (deepest negative Z)
+        if ($null -eq $laserCuttingDepth.Value -or $zValue -lt $laserCuttingDepth.Value) {
+            $laserCuttingDepth.Value = $zValue
+        }
+
+        # Determine if lifted based on cutting depth
+        $isLift = $null -ne $laserCuttingDepth.Value -and $zValue -gt ($laserCuttingDepth.Value + 0.1)
+        $laserLifted.Value = $isLift
+
         # Save the X and Y coordinates from ramp moves
         if ($line -match 'X([-\d\.]+)') {
             $lastRampX.Value = $matches[1]
@@ -442,8 +474,8 @@ function Process-LaserLine {
         if ($line -match 'Y([-\d\.]+)') {
             $lastRampY.Value = $matches[1]
         }
-        # For first move with Z, output the Z to set focal depth
-        if ($firstLaserMove.Value -and $zValue -le 0) {
+        # For first move with Z at cutting depth, output the Z to set focal depth
+        if ($firstLaserMove.Value -and -not $isLift) {
             # Build output with XY if present, plus Z
             $xCoord = ""
             $yCoord = ""
@@ -567,6 +599,7 @@ function Merge-GCodeFiles {
     $laserLifted = $false
     $currentLaserPower = 0
     $currentFeedrate = $null
+    $laserCuttingDepth = $null
 
     # Add G54→G55 backup at the very start of the merged file
     # This preserves the original G54 WCS so we can restore it after laser operations
@@ -637,7 +670,7 @@ function Merge-GCodeFiles {
             }
 
             # Process line for laser transformation
-            $processedLines = Process-LaserLine -line $line -trimmedLine $trimmedLine -inLaserMode ([ref]$inLaserMode) -laserStarted ([ref]$laserStarted) -lastRampX ([ref]$lastRampX) -lastRampY ([ref]$lastRampY) -firstLaserMove ([ref]$firstLaserMove) -laserLifted ([ref]$laserLifted) -currentLaserPower ([ref]$currentLaserPower) -currentFeedrate ([ref]$currentFeedrate) -fileName $file.FileName -laserSetupInfo $laserSetupInfo -laserPauseEnabled $laserPauseEnabled
+            $processedLines = Process-LaserLine -line $line -trimmedLine $trimmedLine -inLaserMode ([ref]$inLaserMode) -laserStarted ([ref]$laserStarted) -lastRampX ([ref]$lastRampX) -lastRampY ([ref]$lastRampY) -firstLaserMove ([ref]$firstLaserMove) -laserLifted ([ref]$laserLifted) -currentLaserPower ([ref]$currentLaserPower) -currentFeedrate ([ref]$currentFeedrate) -laserCuttingDepth ([ref]$laserCuttingDepth) -fileName $file.FileName -laserSetupInfo $laserSetupInfo -laserPauseEnabled $laserPauseEnabled
 
             foreach ($processedLine in $processedLines) {
                 if ($processedLine -ne $null -and $processedLine -ne '') {
@@ -651,6 +684,7 @@ function Merge-GCodeFiles {
             [void]$mergedContent.AppendLine("(--- End Laser Paths ---)")
             [void]$mergedContent.AppendLine("M5 (Laser off)")
             [void]$mergedContent.AppendLine("M322 (Disable laser mode)")
+            [void]$mergedContent.AppendLine("G54 (Ensure G54 active after laser mode)")
             [void]$mergedContent.AppendLine("G0 Z20 (Safe Z retract)")
             if ($laserPauseEnabled) {
                 [void]$mergedContent.AppendLine("M600 (Reinstall vacuum boot and laser cap)")

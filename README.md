@@ -24,7 +24,7 @@ This utility merges sequenced G-code files into a single file that can be run on
   - Tool changes and operations from each file in sequence
   - Footer from last file only (spindle stop, return home, program end)
 - Adds debug comments showing source file boundaries
-- Skips already-merged files to prevent re-processing
+- Ignores `-merged.cnc` files if accidentally included in selection
 - Automatically transforms dummy tool T99 into laser G-code
 - Optional M600 pauses for vacuum boot removal/reinstallation (checkbox in UI)
 
@@ -89,7 +89,7 @@ The merged file is named `{ProjectName}-merged.cnc` and placed in the same folde
 
 ## Carvera Laser Support (T99)
 
-The Carvera CNC has a laser module, but Fusion 360 doesn't natively support it. This utility provides a workaround with automatic surface probing for correct focal height.
+The Carvera CNC has a laser module, but Fusion 360 doesn't natively support it. This utility provides a workaround by transforming dummy T99 tool operations into proper Carvera laser G-code.
 
 ### Setup in Fusion 360
 
@@ -103,10 +103,11 @@ The Carvera CNC has a laser module, but Fusion 360 doesn't natively support it. 
    - Too fast (e.g., 1000 mm/min) will result in faint or invisible marks
    - Experiment with feed rate and power to find the right combination for your material
 4. Use T99 for engraving/marking operations in your CAM setup
+   - **Note:** Laser support has only been tested with **2D Milling → Trace** operations
 
 ### What the Tool Does
 
-When T99 is detected in the G-code, the utility automatically handles the complete laser workflow including surface probing for correct focal height.
+When T99 is detected in the G-code, the utility automatically handles the complete laser workflow. The M321 command handles Z positioning automatically.
 
 **Job Start** (added to beginning of merged file):
 
@@ -119,21 +120,13 @@ G10 L20 P2 X0 Y0 Z0     ; Backup G54 origin to G55
 
 ```gcode
 M5                      ; Spindle stop
-T0 M6                   ; Pick up wireless probe
+M321                    ; Enable laser mode (handles Z positioning)
 M600                    ; Pause - remove vacuum boot for laser (optional)
-G54                     ; Ensure G54 WCS
-G0 Z20                  ; Safe Z height
-G0 X## Y##              ; Move to first laser position
-G38.2 Z-50 F100         ; Probe surface
-G10 L20 P1 Z0           ; Set G54 Z0 to probed surface
-G0 Z5                   ; Retract after probe
-M321                    ; Enable laser mode (auto-returns probe, applies offset)
-G0 Z0                   ; Move to laser focal height
 M325 S##                ; Set laser power (0-100%)
 M3                      ; Enable laser firing
 ```
 
-**Note:** G55 serves as a backup of the original G54 coordinates. The laser probing modifies G54 Z0 to the actual surface, and M321 applies additional coordinate transformations for the laser module. After laser operations, G54 is restored from the G55 backup.
+**Note:** G55 serves as a backup of the original G54 coordinates. M321 handles the laser module setup including Z positioning. After laser operations, G54 is restored from the G55 backup.
 
 **During Laser Operation**:
 
