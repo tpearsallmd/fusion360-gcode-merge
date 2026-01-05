@@ -415,6 +415,7 @@ function Process-LaserLine {
             # Pass through the first plunge, skip subsequent ones
             if ($firstLaserMove.Value) {
                 $laserLifted.Value = $false
+                $firstLaserMove.Value = $false  # First move complete, next XY is a cut
                 return @("G0 Z$zMatch (Move to laser focal depth)")
             } else {
                 $laserLifted.Value = $false
@@ -470,6 +471,7 @@ function Process-LaserLine {
         }
         # For first move with Z at cutting depth, output the Z to set focal depth
         if ($firstLaserMove.Value -and -not $isLift) {
+            $firstLaserMove.Value = $false  # First move complete, next XY is a cut
             # Build output with XY if present, plus Z
             $xCoord = ""
             $yCoord = ""
