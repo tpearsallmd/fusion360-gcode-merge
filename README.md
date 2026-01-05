@@ -98,7 +98,11 @@ The Carvera CNC has a laser module, but Fusion 360 doesn't natively support it. 
    - `S100` = 10% laser power
    - `S500` = 50% laser power
    - `S1000` = 100% laser power (maximum)
-3. Use T99 for engraving/marking operations in your CAM setup
+3. Set the "cutting feedrate" appropriate for laser engraving:
+   - The Carvera's 2.5W laser needs slow feed rates (100-300 mm/min) to burn properly
+   - Too fast (e.g., 1000 mm/min) will result in faint or invisible marks
+   - Experiment with feed rate and power to find the right combination for your material
+4. Use T99 for engraving/marking operations in your CAM setup
 
 ### What the Tool Does
 
@@ -213,6 +217,7 @@ To rebuild the executable after modifying the PowerShell script:
 ## Future Enhancements
 
 - [ ] **Per-operation laser probing** - Option to probe for each laser operation when multiple T99 operations target different surface heights (e.g., engraving on stepped surfaces or pockets at different depths)
+- [ ] **Per-operation laser feedrate** - Currently the feedrate from the first laser operation is used for all subsequent laser operations. If you need different feedrates for different laser operations (e.g., faster for light marking, slower for deep engraving), this is not yet supported.
 
 ## License
 

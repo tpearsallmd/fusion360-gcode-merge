@@ -273,6 +273,7 @@ function Process-LaserLine {
         [ref]$firstLaserMove,
         [ref]$laserLifted,
         [ref]$currentLaserPower,
+        [ref]$currentFeedrate,
         [string]$fileName,
         [hashtable]$laserSetupInfo,
         [bool]$laserPauseEnabled
@@ -305,24 +306,17 @@ function Process-LaserLine {
         $currentLaserPower.Value = $spindleSpeed
 
         # Build laser setup sequence
-        # Strategy: G55 was backed up from G54 at job start. Let M321 modify G54 freely.
-        # After laser, we'll restore G54 from G55.
+        # No reprobe needed - Fusion CAM already knows the target Z depth relative to stock top
+        # M321 will use the existing G54 Z0 (stock top) and Fusion's Z moves position the laser
         $setupLines = @(
             "(--- Begin Laser Setup ---)",
             "M5 (Spindle stop)",
-            "T0 M6 (Pick up wireless probe)"
+            "M321 (Enable laser mode)"
         )
         if ($laserPauseEnabled) {
-            $setupLines += "M600 (Remove vacuum boot for laser engraving)"
+            $setupLines += "M600 (Remove vacuum boot and laser cap for laser engraving)"
         }
-        # Probe surface, let M321 handle the Z positioning
-        # G38.2 probe sets Z position, M321 uses that to position laser at focal height
         $setupLines += @(
-            "G54 (Ensure G54 WCS)",
-            "G0 Z20 (Safe Z height)",
-            "G0 X$probeX Y$probeY (Move to first laser position)",
-            "G38.2 Z-50 F100 (Probe surface - M321 uses this for focal height)",
-            "M321 (Enable laser mode - returns probe, positions at focal height)",
             "M325 S$laserPowerPercent (Set laser power $laserPowerPercent%)",
             "M3 (Enable laser firing)",
             "(--- Begin Laser Paths ---)"
@@ -338,16 +332,18 @@ function Process-LaserLine {
             "(--- End Laser Paths ---)",
             "M5 (Laser off)",
             "M322 (Disable laser mode)",
-            "G0 Z20 (Safe Z retract)",
+            "G0 Z20 (Safe Z retract)"
+        )
+        if ($laserPauseEnabled) {
+            $teardownLines += "M600 (Reinstall vacuum boot and laser cap)"
+        }
+        $teardownLines += @(
             "(--- Restore G54 from G55 backup ---)",
             "G55 (Switch to G55 - our backup of original G54)",
             "G10 L20 P1 X0 Y0 Z0 (Restore G54 from G55)",
             "G54 (Switch back to G54 for milling)",
             $line
         )
-        if ($laserPauseEnabled) {
-            $teardownLines += "M600 (Reinstall vacuum boot)"
-        }
         return $teardownLines
     }
 
@@ -382,8 +378,8 @@ function Process-LaserLine {
         return @()
     }
 
-    # Handle Z moves in laser mode - detect lifts (Z positive) vs plunges (Z negative/zero)
-    # Check for Z-only lines (bare Z2, Z0, etc.) or G0/G1 Z moves
+    # Handle Z moves in laser mode
+    # Pass through the first Z plunge (to get laser to target depth), then track lifted state
     $zMatch = $null
     if ($trimmedLine -match '^Z([-\d\.]+)') {
         $zMatch = $matches[1]
@@ -393,14 +389,25 @@ function Process-LaserLine {
 
     if ($null -ne $zMatch) {
         $zValue = [double]$zMatch
+        # Capture feedrate from Z moves (modal, applies to subsequent G1 moves)
+        if ($line -match 'F([\d\.]+)') {
+            $currentFeedrate.Value = $matches[1]
+        }
         if ($zValue -gt 0) {
             # Positive Z = lift/retract = laser should be off for next move
             $laserLifted.Value = $true
+            return @()  # Don't output retracts
         } else {
-            # Zero or negative Z = plunge = laser back on
-            $laserLifted.Value = $false
+            # Zero or negative Z = plunge to cutting depth
+            # Pass through the first plunge, skip subsequent ones
+            if ($firstLaserMove.Value) {
+                $laserLifted.Value = $false
+                return @("G0 Z$zMatch (Move to laser focal depth)")
+            } else {
+                $laserLifted.Value = $false
+                return @()  # Already at depth, skip
+            }
         }
-        return @()
     }
 
     # Handle G0 rapid moves in laser mode - extract XY and output as G0 (repositioning)
@@ -419,7 +426,7 @@ function Process-LaserLine {
         return @()
     }
 
-    # Track XY from ramp/entry moves (lines with Z component) but don't output them
+    # Handle lines with Z component (ramp/entry moves)
     if ($line -match 'Z([-\d\.]+)') {
         $zValue = [double]$matches[1]
         # Update lifted state based on Z value
@@ -434,6 +441,15 @@ function Process-LaserLine {
         }
         if ($line -match 'Y([-\d\.]+)') {
             $lastRampY.Value = $matches[1]
+        }
+        # For first move with Z, output the Z to set focal depth
+        if ($firstLaserMove.Value -and $zValue -le 0) {
+            # Build output with XY if present, plus Z
+            $xCoord = ""
+            $yCoord = ""
+            if ($line -match 'X([-\d\.]+)') { $xCoord = "X$($matches[1])" }
+            if ($line -match 'Y([-\d\.]+)') { $yCoord = "Y$($matches[1])" }
+            return @("G0 $xCoord $yCoord Z$zValue (Initial position and focal depth)".Trim())
         }
         return @()
     }
@@ -472,8 +488,13 @@ function Process-LaserLine {
         $outputLine = "G0 $xCoord $yCoord".Trim()
     } else {
         # Not lifted = G1 cutting move (laser on)
+        # Use feedrate from line if present, otherwise use captured feedrate from Z moves
+        $feedToUse = $fValue
+        if ($feedToUse -eq "" -and $null -ne $currentFeedrate.Value -and $currentFeedrate.Value -ne "") {
+            $feedToUse = "F$($currentFeedrate.Value)"
+        }
         $parts = @("G1", $xCoord, $yCoord)
-        if ($fValue -ne "") { $parts += $fValue }
+        if ($feedToUse -ne "") { $parts += $feedToUse }
         $outputLine = ($parts | Where-Object { $_ -ne "" }) -join " "
     }
 
@@ -545,6 +566,7 @@ function Merge-GCodeFiles {
     $firstLaserMove = $true
     $laserLifted = $false
     $currentLaserPower = 0
+    $currentFeedrate = $null
 
     # Add G54→G55 backup at the very start of the merged file
     # This preserves the original G54 WCS so we can restore it after laser operations
@@ -615,7 +637,7 @@ function Merge-GCodeFiles {
             }
 
             # Process line for laser transformation
-            $processedLines = Process-LaserLine -line $line -trimmedLine $trimmedLine -inLaserMode ([ref]$inLaserMode) -laserStarted ([ref]$laserStarted) -lastRampX ([ref]$lastRampX) -lastRampY ([ref]$lastRampY) -firstLaserMove ([ref]$firstLaserMove) -laserLifted ([ref]$laserLifted) -currentLaserPower ([ref]$currentLaserPower) -fileName $file.FileName -laserSetupInfo $laserSetupInfo -laserPauseEnabled $laserPauseEnabled
+            $processedLines = Process-LaserLine -line $line -trimmedLine $trimmedLine -inLaserMode ([ref]$inLaserMode) -laserStarted ([ref]$laserStarted) -lastRampX ([ref]$lastRampX) -lastRampY ([ref]$lastRampY) -firstLaserMove ([ref]$firstLaserMove) -laserLifted ([ref]$laserLifted) -currentLaserPower ([ref]$currentLaserPower) -currentFeedrate ([ref]$currentFeedrate) -fileName $file.FileName -laserSetupInfo $laserSetupInfo -laserPauseEnabled $laserPauseEnabled
 
             foreach ($processedLine in $processedLines) {
                 if ($processedLine -ne $null -and $processedLine -ne '') {
@@ -630,13 +652,13 @@ function Merge-GCodeFiles {
             [void]$mergedContent.AppendLine("M5 (Laser off)")
             [void]$mergedContent.AppendLine("M322 (Disable laser mode)")
             [void]$mergedContent.AppendLine("G0 Z20 (Safe Z retract)")
+            if ($laserPauseEnabled) {
+                [void]$mergedContent.AppendLine("M600 (Reinstall vacuum boot and laser cap)")
+            }
             [void]$mergedContent.AppendLine("(--- Restore G54 from G55 backup ---)")
             [void]$mergedContent.AppendLine("G55 (Switch to G55 - our backup of original G54)")
             [void]$mergedContent.AppendLine("G10 L20 P1 X0 Y0 Z0 (Restore G54 from G55)")
             [void]$mergedContent.AppendLine("G54 (Switch back to G54)")
-            if ($laserPauseEnabled) {
-                [void]$mergedContent.AppendLine("M600 (Reinstall vacuum boot)")
-            }
         }
 
         [void]$mergedContent.AppendLine("(--- End of $($file.FileName).cnc ---)")
