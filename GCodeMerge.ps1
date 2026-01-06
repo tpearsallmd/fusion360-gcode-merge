@@ -8,7 +8,7 @@
     transformation for Carvera CNC with surface probing.
 
 .NOTES
-    Version: 1.1.0
+    Version: 1.2.0
     Author:  Todd Pearsall
     License: CC BY-NC 4.0
     GitHub:  https://github.com/tpearsallmd/fusion360-gcode-merge
