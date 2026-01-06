@@ -192,26 +192,12 @@ This is likely the M600 pause working as intended. The **Laser Pause** checkbox 
 
 If you don't need these pauses (e.g., laser-only job, or you've modified your setup), uncheck the **Laser Pause** checkbox before merging.
 
-### Milling operation after laser is at wrong height
-
-The tool restores G54 from a G55 backup after laser operations. If your G55 was already in use for something else, this could cause issues. The tool assumes G55 is available for temporary backup storage.
-
-### Laser doesn't fire at all
-
-1. Verify the laser cap is removed
-2. Check that M3 (laser enable) appears in the merged G-code after M321
-3. Ensure laser power is set (M325 S## where ## is 1-100)
-4. Confirm the Carvera laser module is properly installed and calibrated
-
 ### Files won't merge - "missing file in sequence" error
 
 File names must be consecutive with no gaps. If you have `Job-1001.cnc` and `Job-1003.cnc`, the tool expects `Job-1002.cnc` to exist. Either:
 - Export the missing file from Fusion 360
 - Rename files to be consecutive (e.g., rename 1003 to 1002)
 
-### Wrong tool picked up after laser operation
-
-The G54 coordinate system is restored from G55 after laser mode ends. If milling tools are picking up at wrong positions, verify your original G54 zero point is correct before running the job.
 
 ## Building the EXE
 
