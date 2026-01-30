@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.2.1 - 2025-01-29
+
+### Bug Fixes
+
+- **Improved error message for invalid filename format** - When dropping files that don't match the expected naming convention (e.g., `1001.cnc` instead of `ProjectName-1001.cnc`), the app now shows a clear error message explaining the required format with an example, instead of the generic "Add at least 1 file to process" message.
+
 ## v1.2.0 - 2025-01-05
 
 ### Bug Fixes

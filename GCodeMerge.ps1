@@ -8,7 +8,7 @@
     transformation for Carvera CNC with surface probing.
 
 .NOTES
-    Version: 1.2.0
+    Version: 1.2.1
     Author:  Todd Pearsall
     License: CC BY-NC 4.0
     GitHub:  https://github.com/tpearsallmd/fusion360-gcode-merge
@@ -720,27 +720,34 @@ $form.Add_DragDrop({
 
     $files = $_.Data.GetData([Windows.Forms.DataFormats]::FileDrop)
 
+    # Track rejected files for better error messaging
+    $rejectedFiles = @{
+        NonCnc = @()
+        Merged = @()
+        InvalidFormat = @()
+    }
+    $addedCount = 0
+
     foreach ($filePath in $files) {
+        $fileName = [System.IO.Path]::GetFileName($filePath)
+
         # Only accept .cnc files
         if ([System.IO.Path]::GetExtension($filePath).ToLower() -ne ".cnc") {
-            $statusLabel.Text = "Skipped non-.cnc file: $([System.IO.Path]::GetFileName($filePath))"
-            $statusLabel.ForeColor = [System.Drawing.Color]::DarkOrange
+            $rejectedFiles.NonCnc += $fileName
             continue
         }
 
         # Skip already-merged files
-        $fileName = [System.IO.Path]::GetFileNameWithoutExtension($filePath)
-        if ($fileName -match '-merged$') {
-            $statusLabel.Text = "Skipped merged file: $([System.IO.Path]::GetFileName($filePath))"
-            $statusLabel.ForeColor = [System.Drawing.Color]::DarkOrange
+        $fileNameNoExt = [System.IO.Path]::GetFileNameWithoutExtension($filePath)
+        if ($fileNameNoExt -match '-merged$') {
+            $rejectedFiles.Merged += $fileName
             continue
         }
 
         $parsed = Parse-FileName -filePath $filePath
 
         if ($null -eq $parsed) {
-            $statusLabel.Text = "Invalid filename format: $([System.IO.Path]::GetFileName($filePath))`nExpected: prefix-number.cnc"
-            $statusLabel.ForeColor = [System.Drawing.Color]::DarkRed
+            $rejectedFiles.InvalidFormat += $fileName
             continue
         }
 
@@ -748,10 +755,35 @@ $form.Add_DragDrop({
         $exists = $script:fileList | Where-Object { $_.Path -eq $filePath }
         if ($null -eq $exists) {
             [void]$script:fileList.Add($parsed)
+            $addedCount++
         }
     }
 
-    Update-UI
+    # If no files were added, show specific error message instead of generic one
+    if ($addedCount -eq 0 -and $script:fileList.Count -eq 0) {
+        if ($rejectedFiles.InvalidFormat.Count -gt 0) {
+            $examples = $rejectedFiles.InvalidFormat | Select-Object -First 3
+            $statusLabel.Text = "Invalid filename format: $($examples -join ', ')`nExpected format: ProjectName-1001.cnc (e.g., Coin-1001.cnc)"
+            $statusLabel.ForeColor = [System.Drawing.Color]::DarkRed
+        }
+        elseif ($rejectedFiles.NonCnc.Count -gt 0) {
+            $statusLabel.Text = "Only .cnc files are accepted"
+            $statusLabel.ForeColor = [System.Drawing.Color]::DarkOrange
+        }
+        elseif ($rejectedFiles.Merged.Count -gt 0) {
+            $statusLabel.Text = "Cannot add already-merged files"
+            $statusLabel.ForeColor = [System.Drawing.Color]::DarkOrange
+        }
+        $mergeButton.Enabled = $false
+    }
+    else {
+        Update-UI
+
+        # Show warning if some files were skipped
+        if ($rejectedFiles.InvalidFormat.Count -gt 0) {
+            $statusLabel.Text = $statusLabel.Text + "`n(Skipped $($rejectedFiles.InvalidFormat.Count) file(s) with invalid format)"
+        }
+    }
 })
 
 # Clear button click
